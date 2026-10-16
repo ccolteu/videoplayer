@@ -49,7 +49,17 @@ class PlayerActivity : ComponentActivity() {
     val vm = ViewModelProvider(this)[PlayerViewModel::class.java]
     composeView.setContent {
       VideoPlayerTheme {
-        PlayerScreen(path = path, title = title, onBack = { finish() }, vm = vm)
+        PlayerScreen(
+          path = path,
+          title = title,
+          onBack = { finish() },
+          onNowPlaying = { currentPath, currentTitle ->
+            intent.putExtra(EXTRA_PATH, currentPath)
+            intent.putExtra(EXTRA_TITLE, currentTitle)
+            setIntent(intent)
+          },
+          vm = vm,
+        )
       }
     }
     videoLayout.post { vm.attach(videoLayout) }

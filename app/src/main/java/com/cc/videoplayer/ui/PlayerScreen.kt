@@ -5,6 +5,8 @@ import android.media.AudioManager
 import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,18 +15,24 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -68,13 +76,22 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import com.cc.videoplayer.browse.formatDuration
+import com.cc.videoplayer.playback.MediaTrack
 import com.cc.videoplayer.playback.PlaybackState
 import com.cc.videoplayer.playback.PlayerViewModel
+import com.cc.videoplayer.theme.Cream
+import com.cc.videoplayer.theme.Panel
 import com.cc.videoplayer.theme.Signal
 import kotlinx.coroutines.delay
 
 @Composable
-fun PlayerScreen(path: String, title: String, onBack: () -> Unit, vm: PlayerViewModel = viewModel()) {
+fun PlayerScreen(
+  path: String,
+  title: String,
+  onBack: () -> Unit,
+  onNowPlaying: (String, String) -> Unit = { _, _ -> },
+  vm: PlayerViewModel = viewModel(),
+) {
   val state by vm.state.collectAsStateWithLifecycle()
   val context = LocalContext.current
   val activity = context as ComponentActivity
@@ -85,11 +102,24 @@ fun PlayerScreen(path: String, title: String, onBack: () -> Unit, vm: PlayerView
   var flashText by remember { mutableStateOf("") }
   var flashTick by remember { mutableIntStateOf(0) }
   var inPip by remember { mutableStateOf(activity.isInPictureInPictureMode) }
+  var trackSheet by remember { mutableStateOf(TrackSheet.None) }
 
   LaunchedEffect(path, title) { vm.openFile(path, title) }
 
-  LaunchedEffect(controlsVisible, state.playing, scrubbing) {
-    if (controlsVisible && state.playing && !scrubbing) {
+  LaunchedEffect(state.path, state.title) {
+    if (state.path.isNotBlank()) onNowPlaying(state.path, state.title)
+  }
+
+  LaunchedEffect(state.playbackId) {
+    trackSheet = TrackSheet.None
+    if (state.resumeAtMs >= 5_000L) {
+      flashText = "Resumed ${formatDuration(state.resumeAtMs)}"
+      flashTick += 1
+    }
+  }
+
+  LaunchedEffect(controlsVisible, state.playing, scrubbing, trackSheet) {
+    if (controlsVisible && state.playing && !scrubbing && trackSheet == TrackSheet.None) {
       delay(3_000)
       controlsVisible = false
     }
@@ -211,8 +241,12 @@ fun PlayerScreen(path: String, title: String, onBack: () -> Unit, vm: PlayerView
         onPlayPause = vm::playPause,
         onSkipBack = { vm.skipBy(-10_000) },
         onSkipForward = { vm.skipBy(10_000) },
+        onPrevious = vm::playPrevious,
+        onNext = vm::playNext,
         onSpeed = vm::cycleSpeed,
         onAspect = vm::cycleAspect,
+        onAudio = { trackSheet = TrackSheet.Audio },
+        onSubtitles = { trackSheet = TrackSheet.Subtitles },
         onPip = {
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val params = PictureInPictureParams.Builder().setAspectRatio(vm.pipAspectRatio()).build()
@@ -221,8 +255,25 @@ fun PlayerScreen(path: String, title: String, onBack: () -> Unit, vm: PlayerView
         },
       )
     }
+
+    if (trackSheet != TrackSheet.None && !inPip) {
+      val tracks = if (trackSheet == TrackSheet.Audio) state.audioTracks else state.subtitleTracks
+      val selected = if (trackSheet == TrackSheet.Audio) state.audioTrackId else state.subtitleTrackId
+      TrackList(
+        title = if (trackSheet == TrackSheet.Audio) "Audio" else "Subtitles",
+        tracks = tracks,
+        selectedId = selected,
+        onSelect = { id ->
+          if (trackSheet == TrackSheet.Audio) vm.selectAudioTrack(id) else vm.selectSubtitleTrack(id)
+          trackSheet = TrackSheet.None
+        },
+        onDismiss = { trackSheet = TrackSheet.None },
+      )
+    }
   }
 }
+
+private enum class TrackSheet { None, Audio, Subtitles }
 
 @Composable
 private fun PlayerChrome(
@@ -236,8 +287,12 @@ private fun PlayerChrome(
   onPlayPause: () -> Unit,
   onSkipBack: () -> Unit,
   onSkipForward: () -> Unit,
+  onPrevious: () -> Unit,
+  onNext: () -> Unit,
   onSpeed: () -> Unit,
   onAspect: () -> Unit,
+  onAudio: () -> Unit,
+  onSubtitles: () -> Unit,
   onPip: () -> Unit,
 ) {
   val duration = state.durationMs.coerceAtLeast(0L)
@@ -307,6 +362,13 @@ private fun PlayerChrome(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
       ) {
+        IconButton(onClick = onPrevious, enabled = state.hasPrevious) {
+          Icon(
+            Icons.Filled.SkipPrevious,
+            contentDescription = "Previous",
+            tint = if (state.hasPrevious) Color.White else Color.White.copy(alpha = 0.35f),
+          )
+        }
         IconButton(onClick = onSkipBack) {
           Icon(Icons.Filled.Replay10, contentDescription = "Back 10 seconds", tint = Color.White)
         }
@@ -316,13 +378,86 @@ private fun PlayerChrome(
         IconButton(onClick = onSkipForward) {
           Icon(Icons.Filled.Forward10, contentDescription = "Forward 10 seconds", tint = Color.White)
         }
+        IconButton(onClick = onNext, enabled = state.hasNext) {
+          Icon(
+            Icons.Filled.SkipNext,
+            contentDescription = "Next",
+            tint = if (state.hasNext) Color.White else Color.White.copy(alpha = 0.35f),
+          )
+        }
+      }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
         TextButton(onClick = onSpeed) { Text(state.speedLabel) }
         TextButton(onClick = onAspect) { Text(state.aspectLabel) }
+        if (state.audioTracks.size > 1) {
+          TextButton(onClick = onAudio) { Text("Audio") }
+        }
+        if (state.subtitleTracks.isNotEmpty()) {
+          IconButton(onClick = onSubtitles) {
+            Icon(Icons.Filled.ClosedCaption, contentDescription = "Subtitles", tint = Color.White)
+          }
+        }
         if (pipAvailable) {
           IconButton(onClick = onPip) {
             Icon(Icons.Filled.PictureInPicture, contentDescription = "Picture in picture", tint = Color.White)
           }
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun TrackList(
+  title: String,
+  tracks: List<MediaTrack>,
+  selectedId: Int,
+  onSelect: (Int) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  Box(
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .background(Color.Black.copy(alpha = 0.45f))
+        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
+  ) {
+    Column(
+      modifier =
+        Modifier
+          .align(Alignment.BottomCenter)
+          .fillMaxWidth()
+          .heightIn(max = 420.dp)
+          .background(Panel)
+          .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
+          .windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
+      Column(
+        modifier =
+          Modifier
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 8.dp, vertical = 12.dp),
+      ) {
+      Text(
+        title,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        color = Cream,
+        style = MaterialTheme.typography.titleMedium,
+      )
+      tracks.forEach { track ->
+        val selected = track.id == selectedId
+        TextButton(onClick = { onSelect(track.id) }, modifier = Modifier.fillMaxWidth()) {
+          Text(
+            track.name.ifBlank { "Track" },
+            modifier = Modifier.fillMaxWidth(),
+            color = if (selected) Signal else Cream,
+          )
+        }
+      }
       }
     }
   }

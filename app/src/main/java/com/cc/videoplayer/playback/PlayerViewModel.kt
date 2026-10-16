@@ -1,6 +1,10 @@
 package com.cc.videoplayer.playback
 
 import android.app.Application
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -10,28 +14,40 @@ import androidx.lifecycle.AndroidViewModel
 import com.cc.videoplayer.browse.formatSpeed
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import java.io.File
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.interfaces.IVLCVout
 import org.videolan.libvlc.util.VLCVideoLayout
 
 data class PlaybackState(
   val title: String = "",
+  val path: String = "",
+  val playbackId: Int = 0,
   val playing: Boolean = false,
   val ended: Boolean = false,
   val buffering: Boolean = true,
   val positionMs: Long = 0,
   val durationMs: Long = 0,
+  val resumeAtMs: Long = 0,
   val speed: Float = 1f,
   val speedLabel: String = "1×",
   val aspect: MediaPlayer.ScaleType = MediaPlayer.ScaleType.SURFACE_BEST_FIT,
   val aspectLabel: String = "Fit",
   val error: String? = null,
+  val hasPrevious: Boolean = false,
+  val hasNext: Boolean = false,
+  val audioTracks: List<MediaTrack> = emptyList(),
+  val audioTrackId: Int = -1,
+  val subtitleTracks: List<MediaTrack> = emptyList(),
+  val subtitleTrackId: Int = -1,
 )
 
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
   private val mainHandler = Handler(Looper.getMainLooper())
+  private val audioManager = application.getSystemService(AudioManager::class.java)
   private val speeds = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
   private val aspects =
     arrayOf(
@@ -57,6 +73,31 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   private var profileRewrite: HevcProfileRewrite? = null
   private var restarting = false
   private var released = false
+  private var playbackGeneration = 0
+  private var playlist = FolderQueue(emptyList(), -1)
+  private var pausedByFocus = false
+  private var finishedPath: String? = null
+  private var lastPersistedMs = Long.MIN_VALUE
+  private var focusRequest: AudioFocusRequest? = null
+  private val focusListener =
+    AudioManager.OnAudioFocusChangeListener { change ->
+      mainHandler.post {
+        if (released) return@post
+        when (change) {
+          AudioManager.AUDIOFOCUS_GAIN ->
+            if (pausedByFocus) {
+              pausedByFocus = false
+              resumeAfterFocus()
+            }
+          AudioManager.AUDIOFOCUS_LOSS -> {
+            pausedByFocus = false
+            pauseForFocus(abandon = true)
+          }
+          AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> pauseForFocus(abandon = false)
+          else -> Unit
+        }
+      }
+    }
   private val surfaceCallback =
     object : IVLCVout.Callback {
       override fun onSurfacesCreated(vout: IVLCVout) {
@@ -81,23 +122,58 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
       _state.update { it.copy(title = title) }
       return
     }
+    persistPosition(commit = true)
+    finishedPath = null
     openedPath = path
+    lastPersistedMs = Long.MIN_VALUE
+    pausedByFocus = false
+    playlist = FolderPlaylist.around(path)
+    val resumeAt = PlaybackMemory.savedPosition(getApplication(), path)
     val keptSpeed = _state.value.speed
     val keptAspect = _state.value.aspect
+    playbackGeneration += 1
     _state.value =
       PlaybackState(
         title = title,
+        path = path,
+        playbackId = playbackGeneration,
         buffering = true,
+        positionMs = resumeAt,
+        resumeAtMs = resumeAt,
         speed = keptSpeed,
         speedLabel = formatSpeed(keptSpeed),
         aspect = keptAspect,
         aspectLabel = aspectLabel(keptAspect),
+        hasPrevious = playlist.hasPrevious,
+        hasNext = playlist.hasNext,
       )
     try {
-      playFrom(0)
+      playFrom(resumeAt)
     } catch (_: Throwable) {
       _state.update { it.copy(buffering = false, error = "Can't open this file.") }
     }
+  }
+
+  fun playPrevious() {
+    val previous = playlist.files.getOrNull(playlist.index - 1) ?: return
+    openFile(previous.absolutePath, previous.name)
+  }
+
+  fun playNext() {
+    val next = playlist.files.getOrNull(playlist.index + 1) ?: return
+    openFile(next.absolutePath, next.name)
+  }
+
+  fun selectAudioTrack(id: Int) {
+    if (released) return
+    runCatching { mediaPlayer?.setAudioTrack(id) }
+    publishTracks()
+  }
+
+  fun selectSubtitleTrack(id: Int) {
+    if (released) return
+    runCatching { mediaPlayer?.setSpuTrack(id) }
+    publishTracks()
   }
 
   fun attach(layout: VLCVideoLayout) {
@@ -136,16 +212,26 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     try {
       val player = mediaPlayer
       if (_state.value.ended || player == null || player.media == null) {
+        finishedPath = null
         playFrom(0)
         return
       }
-      if (player.isPlaying) player.pause() else player.play()
+      if (player.isPlaying) {
+        pause()
+      } else {
+        pausedByFocus = false
+        requestFocus()
+        player.play()
+      }
     } catch (_: Throwable) {
       _state.update { it.copy(playing = false, buffering = false, error = "This file can't be played.") }
     }
   }
 
   fun pause() {
+    pausedByFocus = false
+    persistPosition(commit = true)
+    abandonFocus()
     runCatching {
       val player = mediaPlayer
       if (player != null && player.isPlaying) player.pause()
@@ -156,6 +242,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     val length = _state.value.durationMs
     val target = if (length > 0) positionMs.coerceIn(0, length) else positionMs.coerceAtLeast(0)
     if (_state.value.ended) {
+      finishedPath = null
       runCatching { playFrom(target) }
         .onFailure {
           _state.update { it.copy(playing = false, buffering = false, error = "This file can't be played.") }
@@ -164,6 +251,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
     runCatching { mediaPlayer?.setTime(target) }
     _state.update { it.copy(positionMs = target) }
+    persistPosition(target, commit = true)
   }
 
   fun skipBy(deltaMs: Long) {
@@ -200,6 +288,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   override fun onCleared() {
     released = true
     mainHandler.removeCallbacksAndMessages(null)
+    persistPosition(commit = true)
+    abandonFocus()
     mediaPlayer?.let { player ->
       player.setEventListener(null)
       runCatching { player.vlcVout.removeCallback(surfaceCallback) }
@@ -241,6 +331,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     media.addOption(if (hardware) ":codec=mediacodec_ndk,mediacodec,all" else ":codec=avcodec,all")
     media.addOption(":file-caching=1500")
     if (positionMs > 0) media.addOption(":start-time=${positionMs / 1000.0}")
+    for (subtitle in subtitleFiles(File(path))) {
+      val uri = android.net.Uri.fromFile(subtitle).toString()
+      media.addSlave(IMedia.Slave(IMedia.Slave.Type.Subtitle, 1, uri))
+    }
     val previous = currentMedia
     val previousRewrite = profileRewrite
     currentMedia = media
@@ -259,11 +353,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         hardware -> "mediacodec"
         else -> "ffmpeg"
       }
-    Log.i(TAG, "play ${layout.width}x${layout.height} $engine")
+    Log.i(TAG, "play ${layout.width}x${layout.height} $engine at ${positionMs}ms")
+    requestFocus()
     player.play()
     restarting = false
     player.updateVideoSurfaces()
-    _state.update { it.copy(ended = false, playing = true, buffering = true, positionMs = positionMs, error = null) }
+    _state.update {
+      it.copy(ended = false, playing = true, buffering = true, positionMs = positionMs, error = null)
+    }
   }
 
   private fun player(): MediaPlayer {
@@ -303,6 +400,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         MediaPlayer.Event.Vout -> mediaPlayer?.updateVideoSurfaces()
         MediaPlayer.Event.Playing -> {
           mediaPlayer?.updateVideoSurfaces()
+          publishTracks()
           val known = runCatching { mediaPlayer?.length ?: 0L }.getOrDefault(0L)
           _state.update {
             it.copy(
@@ -316,13 +414,128 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
         MediaPlayer.Event.Paused -> _state.update { it.copy(playing = false, buffering = false) }
         MediaPlayer.Event.Stopped -> if (!ignoreStop) _state.update { it.copy(playing = false) }
-        MediaPlayer.Event.EndReached -> _state.update { it.copy(playing = false, ended = true, buffering = false) }
+        MediaPlayer.Event.EndReached -> onEnded(ignoreStop)
         MediaPlayer.Event.EncounteredError ->
           _state.update { it.copy(playing = false, buffering = false, error = "This file can't be played.") }
-        MediaPlayer.Event.TimeChanged -> _state.update { it.copy(positionMs = timeChanged.coerceAtLeast(0)) }
+        MediaPlayer.Event.TimeChanged -> {
+          _state.update { it.copy(positionMs = timeChanged.coerceAtLeast(0)) }
+          persistPosition(timeChanged, commit = false)
+        }
         MediaPlayer.Event.LengthChanged -> _state.update { it.copy(durationMs = lengthChanged.coerceAtLeast(0)) }
+        MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESDeleted, MediaPlayer.Event.ESSelected -> publishTracks()
       }
     }
+  }
+
+  private fun onEnded(ignoreStop: Boolean) {
+    if (ignoreStop) return
+    val finished = openedPath
+    if (finished != null) {
+      finishedPath = finished
+      PlaybackMemory.clear(getApplication(), finished, commit = true)
+    }
+    abandonFocus()
+    val next = playlist.files.getOrNull(playlist.index + 1)
+    if (next != null) {
+      mainHandler.postDelayed({
+        if (released || openedPath != finished) return@postDelayed
+        openFile(next.absolutePath, next.name)
+      }, 50)
+    } else {
+      _state.update { it.copy(playing = false, ended = true, buffering = false) }
+    }
+  }
+
+  private fun publishTracks() {
+    val player = mediaPlayer ?: return
+    val audio = audioChoices(readTracks { player.audioTracks })
+    val subtitles = subtitleChoices(readTracks { player.spuTracks })
+    val audioId = runCatching { player.audioTrack }.getOrDefault(-1)
+    val subtitleId = runCatching { player.spuTrack }.getOrDefault(-1)
+    _state.update {
+      it.copy(
+        audioTracks = audio,
+        audioTrackId = audioId,
+        subtitleTracks = subtitles,
+        subtitleTrackId = subtitleId,
+      )
+    }
+  }
+
+  private fun readTracks(load: () -> Array<MediaPlayer.TrackDescription>?): List<MediaTrack> {
+    val tracks = runCatching(load).getOrNull() ?: return emptyList()
+    return tracks.map { MediaTrack(id = it.id, name = trackLabel(it.name?.trim().orEmpty())) }
+  }
+
+  private fun persistPosition(positionMs: Long = currentPosition(), commit: Boolean) {
+    val path = openedPath ?: return
+    if (path == finishedPath) return
+    if (positionMs < 5_000L) return
+    if (!commit && abs(positionMs - lastPersistedMs) < 5_000L) return
+    val duration = maxOf(_state.value.durationMs, runCatching { mediaPlayer?.length ?: 0L }.getOrDefault(0L))
+    val keep = resumePositionMs(positionMs, duration)
+    if (keep == 0L) {
+      PlaybackMemory.clear(getApplication(), path, commit)
+    } else {
+      PlaybackMemory.write(getApplication(), path, keep, duration, commit)
+    }
+    lastPersistedMs = positionMs
+  }
+
+  private fun currentPosition(): Long {
+    val live = runCatching { mediaPlayer?.time ?: -1L }.getOrDefault(-1L)
+    return if (live > 0L) live else _state.value.positionMs
+  }
+
+  private fun requestFocus() {
+    val manager = audioManager ?: return
+    val result =
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val request = focusRequest ?: newFocusRequest().also { focusRequest = it }
+        manager.requestAudioFocus(request)
+      } else {
+        @Suppress("DEPRECATION")
+        manager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+      }
+    Log.i(TAG, "audio focus $result")
+  }
+
+  private fun abandonFocus() {
+    val manager = audioManager ?: return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      val request = focusRequest ?: return
+      manager.abandonAudioFocusRequest(request)
+    } else {
+      @Suppress("DEPRECATION")
+      manager.abandonAudioFocus(focusListener)
+    }
+  }
+
+  private fun newFocusRequest(): AudioFocusRequest {
+    val attributes =
+      AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+        .build()
+    return AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+      .setAudioAttributes(attributes)
+      .setOnAudioFocusChangeListener(focusListener, mainHandler)
+      .build()
+  }
+
+  private fun pauseForFocus(abandon: Boolean) {
+    val playing = mediaPlayer?.isPlaying == true
+    if (!playing) return
+    pausedByFocus = !abandon
+    persistPosition(commit = true)
+    runCatching { mediaPlayer?.pause() }
+    if (abandon) abandonFocus()
+  }
+
+  private fun resumeAfterFocus() {
+    requestFocus()
+    val player = mediaPlayer ?: return
+    if (player.media != null && !_state.value.ended) runCatching { player.play() }
   }
 
   private fun aspectLabel(aspect: MediaPlayer.ScaleType): String =
