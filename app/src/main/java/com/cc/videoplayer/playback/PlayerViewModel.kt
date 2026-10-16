@@ -227,7 +227,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     awaitingSurface = false
     val player = player()
     val vlc = libVlc ?: return
-    val rewrite = HevcProfileRewrite.open(getApplication(), path)
+    val plan = VideoDecoderChoice.plan(path)
+    val rewrite = if (plan.rewriteHevcMain10) HevcProfileRewrite.open(getApplication(), path) else null
+    val hardware = plan.useMediaCodec && (!plan.rewriteHevcMain10 || rewrite != null)
     val media =
       try {
         if (rewrite != null) Media(vlc, rewrite.fileDescriptor) else Media(vlc, path)
@@ -235,11 +237,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         rewrite?.close()
         throw error
       }
-    // Xvid and the other MPEG-4 files have no hardware decoder here. MediaCodec's
-    // software MPEG-4 decoder accepts them and draws macroblocks, so FFmpeg
-    // takes those. AVC, HEVC, and VP9 stay on MediaCodec. `none` is not used:
-    // it would also reject AAC, because MediaCodec audio is off by default.
-    val hardware = VideoDecoderChoice.useHardware(path)
+    // `none` would also reject AAC, because MediaCodec audio is off by default.
     media.addOption(if (hardware) ":codec=mediacodec_ndk,mediacodec,all" else ":codec=avcodec,all")
     media.addOption(":file-caching=1500")
     if (positionMs > 0) media.addOption(":start-time=${positionMs / 1000.0}")
@@ -255,7 +253,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     player.setVideoTrackEnabled(true)
     player.rate = _state.value.speed
     player.videoScale = _state.value.aspect
-    Log.i(TAG, "play ${layout.width}x${layout.height} ${if (hardware) "mediacodec" else "ffmpeg"}")
+    val engine =
+      when {
+        hardware && plan.rewriteHevcMain10 -> "mediacodec main10"
+        hardware -> "mediacodec"
+        else -> "ffmpeg"
+      }
+    Log.i(TAG, "play ${layout.width}x${layout.height} $engine")
     player.play()
     restarting = false
     player.updateVideoSurfaces()

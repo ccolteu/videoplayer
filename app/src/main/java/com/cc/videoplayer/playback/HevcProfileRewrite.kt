@@ -1,7 +1,6 @@
 package com.cc.videoplayer.playback
 
 import android.content.Context
-import android.media.MediaCodecList
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
@@ -133,24 +132,7 @@ internal class HevcProfileRewrite private constructor(
     }
 
     private fun deviceNeedsRewrite(): Boolean {
-      val profiles = deviceHevcProfiles() ?: return false
-      return 0x2 !in profiles && 0x1000 !in profiles
-    }
-
-    private fun deviceHevcProfiles(): IntArray? {
-      return runCatching {
-        val found = HashSet<Int>()
-        val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
-        for (info in list.codecInfos) {
-          if (info.isEncoder) continue
-          val types = runCatching { info.supportedTypes }.getOrNull() ?: continue
-          if (types.none { it.equals("video/hevc", ignoreCase = true) }) continue
-          val levels =
-            runCatching { info.getCapabilitiesForType("video/hevc").profileLevels }.getOrNull() ?: continue
-          for (level in levels) found.add(level.profile)
-        }
-        found.toIntArray()
-      }.getOrNull()
+      return DecoderSelection.hevcMain10Quirk(DeviceVideoDecoders.listed())
     }
 
     private fun walk(raf: RandomAccessFile, start: Long, end: Long, patches: MutableList<Patch>, depth: Int) {
@@ -213,7 +195,7 @@ internal class HevcProfileRewrite private constructor(
     private fun considerBytes(buf: ByteArray, from: Int, to: Int, fileOffset: Long, patches: MutableList<Patch>) {
       if (to - from < 23 || buf[from] != 1.toByte()) return
       val profile = buf[from + 1].toInt() and 0x1F
-      if (profile == 0 || profile == 1) return
+      if (profile != 2) return
       val patched = ((buf[from + 1].toInt() and 0xE0) or 0x01).toByte()
       val offset = fileOffset + 1
       if (patches.any { it.offset == offset }) return
