@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SdCard
@@ -39,6 +40,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -67,6 +71,7 @@ fun BrowserScreen(vm: BrowserViewModel = viewModel()) {
   val error by vm.error.collectAsStateWithLifecycle()
   val accessGranted by vm.accessGranted.collectAsStateWithLifecycle()
   val insideFolder = place is Place.Directory
+  var showAbout by rememberSaveable { mutableStateOf(false) }
 
   val folderLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -85,7 +90,13 @@ fun BrowserScreen(vm: BrowserViewModel = viewModel()) {
     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
   }
 
-  BackHandler(enabled = insideFolder) { vm.up() }
+  BackHandler(enabled = showAbout) { showAbout = false }
+  BackHandler(enabled = insideFolder && !showAbout) { vm.up() }
+
+  if (showAbout) {
+    AboutScreen(onBack = { showAbout = false })
+    return
+  }
 
   val folderTitle = (place as? Place.Directory)?.title ?: "Video Player"
   Column(
@@ -99,6 +110,7 @@ fun BrowserScreen(vm: BrowserViewModel = viewModel()) {
       subtitle = if (insideFolder) null else "Tap a video to play it here",
       canGoUp = insideFolder,
       onBack = vm::up,
+      onAbout = { showAbout = true },
       onRefresh = vm::refresh,
     )
     if (loading) {
@@ -163,6 +175,7 @@ private fun BrowserTopBar(
   subtitle: String?,
   canGoUp: Boolean,
   onBack: () -> Unit,
+  onAbout: () -> Unit,
   onRefresh: () -> Unit,
 ) {
   Row(
@@ -187,6 +200,9 @@ private fun BrowserTopBar(
           overflow = TextOverflow.Ellipsis,
         )
       }
+    }
+    IconButton(onClick = onAbout) {
+      Icon(Icons.Filled.Info, contentDescription = "About")
     }
     IconButton(onClick = onRefresh) {
       Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
