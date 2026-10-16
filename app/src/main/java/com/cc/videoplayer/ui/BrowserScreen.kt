@@ -1,10 +1,5 @@
 package com.cc.videoplayer.ui
 
-import android.Manifest
-import android.content.ActivityNotFoundException
-import android.content.Intent
-import android.os.Build
-import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -73,10 +68,12 @@ fun BrowserScreen(vm: BrowserViewModel = viewModel()) {
   val accessGranted by vm.accessGranted.collectAsStateWithLifecycle()
   val insideFolder = place is Place.Directory
 
-  val permissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-      vm.refresh()
+  val folderLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      val tree = result.data?.data ?: return@rememberLauncherForActivityResult
+      vm.grant(tree)
     }
+  val chooseFolder = { folderLauncher.launch(StorageBrowser.chooseFolderIntent(context)) }
 
   val lifecycleOwner = LocalLifecycleOwner.current
   DisposableEffect(lifecycleOwner, vm) {
@@ -110,20 +107,7 @@ fun BrowserScreen(vm: BrowserViewModel = viewModel()) {
     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
       if (!accessGranted) {
-        AccessPrompt(
-          onAllow = {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-              val intent = StorageBrowser.manageAccessIntent(context)
-              try {
-                context.startActivity(intent)
-              } catch (_: ActivityNotFoundException) {
-                context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-              }
-            } else {
-              permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-          },
-        )
+        AccessPrompt(onChoose = chooseFolder)
       } else {
         when (val current = place) {
           Place.Roots ->
@@ -132,6 +116,8 @@ fun BrowserScreen(vm: BrowserViewModel = viewModel()) {
               loading = loading,
               error = error,
               onRoot = { root -> vm.openDirectory(root.path, root.label) },
+              onAdd = chooseFolder,
+              onRemove = vm::revoke,
               onRetry = vm::refresh,
             )
           is Place.Directory ->
@@ -155,19 +141,19 @@ fun BrowserScreen(vm: BrowserViewModel = viewModel()) {
 }
 
 @Composable
-private fun AccessPrompt(onAllow: () -> Unit) {
+private fun AccessPrompt(onChoose: () -> Unit) {
   Column(
     modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
     verticalArrangement = Arrangement.Center,
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
     Text(
-      "Allow access to storage so this app can open folders on the SD card and play a video when you tap it.",
+      "Open the folder that holds your videos, such as TV on the SD card. Android will not grant the card itself. Tap Use this folder, then tap a video here to play it.",
       style = MaterialTheme.typography.bodyLarge,
       color = MaterialTheme.colorScheme.onSurface,
     )
     Spacer(modifier = Modifier.size(20.dp))
-    Button(onClick = onAllow) { Text("Allow access") }
+    Button(onClick = onChoose) { Text("Choose a folder") }
   }
 }
 
@@ -214,6 +200,8 @@ private fun RootList(
   loading: Boolean,
   error: String?,
   onRoot: (StorageRoot) -> Unit,
+  onAdd: () -> Unit,
+  onRemove: (String) -> Unit,
   onRetry: () -> Unit,
 ) {
   LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
@@ -243,6 +231,7 @@ private fun RootList(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
+        TextButton(onClick = { onRemove(root.path) }) { Text("Remove") }
         Icon(
           Icons.AutoMirrored.Filled.KeyboardArrowRight,
           contentDescription = null,
@@ -251,14 +240,9 @@ private fun RootList(
       }
       HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
     }
-    if (!loading && roots.isEmpty() && error == null) {
-      item {
-        Text(
-          "No storage was found.",
-          modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-          style = MaterialTheme.typography.bodyLarge,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    item {
+      TextButton(onClick = onAdd, modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+        Text("Add a folder")
       }
     }
   }

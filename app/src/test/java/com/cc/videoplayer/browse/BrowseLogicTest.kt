@@ -2,10 +2,18 @@ package com.cc.videoplayer.browse
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrowseLogicTest {
+  @Test
+  fun parentOfADocumentIsTheFolderAboveIt() {
+    assertEquals("3665-3938:TV/Friends", parentDocumentId("3665-3938:TV/Friends/episode.mp4"))
+    assertEquals("primary:", parentDocumentId("primary:clip.mp4"))
+    assertNull(parentDocumentId("no-colon"))
+  }
+
   @Test
   fun videoMimeAndExtensionBothCount() {
     assertTrue(isVideoFile("clip", "video/mp4"))

@@ -19,4 +19,4 @@ JDK 17 and an Android SDK. The project uses Android Gradle Plugin 8.13.0, Gradle
 ./gradlew :app:testDebugUnitTest
 ```
 
-On Android 11 and later the folder browser needs all-files access (`MANAGE_EXTERNAL_STORAGE`). Older versions use read external storage.
+The first launch asks you to choose a folder. Android then shows its own screen, where opening a row moves into that folder and **Use this folder** grants access. The grant is kept, and the in-app list can open everything inside it.

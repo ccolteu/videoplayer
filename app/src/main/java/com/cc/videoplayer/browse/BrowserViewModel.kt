@@ -1,6 +1,7 @@
 package com.cc.videoplayer.browse
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -65,7 +66,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
               _roots.value = withContext(Dispatchers.IO) { StorageBrowser.roots(getApplication()) }
             }
             is Place.Directory -> {
-              _entries.value = withContext(Dispatchers.IO) { StorageBrowser.children(current.path) }
+              _entries.value = withContext(Dispatchers.IO) { StorageBrowser.children(getApplication(), current.path) }
             }
           }
         } catch (e: CancellationException) {
@@ -85,6 +86,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     _entries.value = emptyList()
     _error.value = null
     stack.value = stack.value.dropLast(1)
+    refresh()
+  }
+
+  fun grant(tree: Uri) {
+    StorageBrowser.persist(getApplication(), tree)
+    _accessGranted.value = true
+    refresh()
+  }
+
+  fun revoke(tree: String) {
+    StorageBrowser.release(getApplication(), Uri.parse(tree))
+    stack.value = listOf(Place.Roots)
     refresh()
   }
 

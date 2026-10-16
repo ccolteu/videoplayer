@@ -41,6 +41,11 @@ private val VideoExtensions =
     "wtv",
   )
 
+fun isSubtitleName(name: String): Boolean {
+  val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.ROOT)
+  return extension in setOf("ass", "srt", "ssa", "sub", "vtt")
+}
+
 fun isVideoFile(name: String, mimeType: String?): Boolean {
   val trimmed = name.trim()
   if (trimmed.startsWith('.')) return false

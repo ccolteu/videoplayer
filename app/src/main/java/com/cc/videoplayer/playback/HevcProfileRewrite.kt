@@ -9,9 +9,8 @@ import android.os.storage.StorageManager
 import android.system.ErrnoException
 import android.system.OsConstants
 import android.util.Log
-import java.io.File
+import android.net.Uri
 import java.io.FileInputStream
-import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 
 /**
@@ -40,6 +39,7 @@ internal class HevcProfileRewrite private constructor(
     private val length: Long,
     private val patches: List<Patch>,
     private val thread: HandlerThread,
+    private val source: ParcelFileDescriptor?,
   ) : ProxyFileDescriptorCallback() {
     private val file = channel.channel
 
@@ -69,6 +69,7 @@ internal class HevcProfileRewrite private constructor(
 
     override fun onRelease() {
       runCatching { channel.close() }
+      runCatching { source?.close() }
       thread.quitSafely()
     }
   }
@@ -80,23 +81,35 @@ internal class HevcProfileRewrite private constructor(
     private val containers = setOf("moov", "trak", "mdia", "minf", "stbl", "edts", "udta", "mvex", "moof", "traf")
     private val hevcCodec = "V_MPEGH/ISO/HEVC".encodeToByteArray()
 
-    fun open(context: Context, path: String): HevcProfileRewrite? {
+    fun open(context: Context, location: String): HevcProfileRewrite? {
       if (android.os.Build.VERSION.SDK_INT < 26) return null
-      val file = File(path)
-      if (!file.isFile) return null
-      val patches = runCatching { findPatches(file) }.getOrElse {
+      val patches = runCatching { findPatches(context, location) }.getOrElse {
         Log.w(TAG, "HEVC profile scan failed", it)
         return null
       }
       if (patches.isEmpty()) return null
-      return runCatching { start(context, file, patches) }.getOrElse {
+      return runCatching { start(context, location, patches) }.getOrElse {
         Log.w(TAG, "HEVC profile rewrite failed", it)
         null
       }
     }
 
-    private fun start(context: Context, file: File, patches: List<Patch>): HevcProfileRewrite {
-      val input = FileInputStream(file)
+    private fun start(context: Context, location: String, patches: List<Patch>): HevcProfileRewrite {
+      val uri = Uri.parse(location)
+      val source =
+        if (uri.scheme == "content") {
+          context.contentResolver.openFileDescriptor(uri, "r")
+            ?: throw IllegalStateException("Can't open this file.")
+        } else {
+          null
+        }
+      val input =
+        if (source != null) {
+          FileInputStream(source.fileDescriptor)
+        } else {
+          FileInputStream(location)
+        }
+      val length = input.channel.size()
       val thread = HandlerThread("hevc-profile")
       thread.start()
       try {
@@ -104,21 +117,22 @@ internal class HevcProfileRewrite private constructor(
         val descriptor =
           storage.openProxyFileDescriptor(
             ParcelFileDescriptor.MODE_READ_ONLY,
-            Reader(input, file.length(), patches, thread),
+            Reader(input, length, patches, thread, source),
             Handler(thread.looper),
           )
         Log.i(TAG, "HEVC profile presented as Main (${patches.size})")
-        return HevcProfileRewrite(input, file.length(), patches, thread, descriptor)
+        return HevcProfileRewrite(input, length, patches, thread, descriptor)
       } catch (error: Throwable) {
         thread.quitSafely()
         runCatching { input.close() }
+        runCatching { source?.close() }
         throw error
       }
     }
 
-    private fun findPatches(file: File): List<Patch> {
+    private fun findPatches(context: Context, location: String): List<Patch> {
       if (!deviceNeedsRewrite()) return emptyList()
-      RandomAccessFile(file, "r").use { raf ->
+      RandomSource.open(context, location).use { raf ->
         if (raf.length() < 12) return emptyList()
         val kind = ByteArray(12)
         raf.readFully(kind)
@@ -135,7 +149,7 @@ internal class HevcProfileRewrite private constructor(
       return DecoderSelection.hevcMain10Quirk(DeviceVideoDecoders.listed())
     }
 
-    private fun walk(raf: RandomAccessFile, start: Long, end: Long, patches: MutableList<Patch>, depth: Int) {
+    private fun walk(raf: RandomSource, start: Long, end: Long, patches: MutableList<Patch>, depth: Int) {
       if (depth > 12 || end - start < 8) return
       var pos = start
       while (pos + 8 <= end) {
@@ -162,7 +176,7 @@ internal class HevcProfileRewrite private constructor(
       }
     }
 
-    private fun scanForHvcC(raf: RandomAccessFile, box: Long, size: Long, patches: MutableList<Patch>) {
+    private fun scanForHvcC(raf: RandomSource, box: Long, size: Long, patches: MutableList<Patch>) {
       if (size < 16 || size > 2_000_000) return
       val buf = ByteArray(size.toInt())
       raf.seek(box)
@@ -183,7 +197,7 @@ internal class HevcProfileRewrite private constructor(
       }
     }
 
-    private fun consider(raf: RandomAccessFile, payload: Long, end: Long, patches: MutableList<Patch>) {
+    private fun consider(raf: RandomSource, payload: Long, end: Long, patches: MutableList<Patch>) {
       val length = end - payload
       if (length !in 23L..4096L) return
       val buf = ByteArray(length.toInt())
@@ -202,7 +216,7 @@ internal class HevcProfileRewrite private constructor(
       patches.add(Patch(offset, patched))
     }
 
-    private fun scanMatroska(raf: RandomAccessFile, patches: MutableList<Patch>) {
+    private fun scanMatroska(raf: RandomSource, patches: MutableList<Patch>) {
       val window = minOf(raf.length(), 8L * 1024 * 1024).toInt()
       if (window < 64) return
       val buf = ByteArray(window)
@@ -264,7 +278,7 @@ internal class HevcProfileRewrite private constructor(
       return -1
     }
 
-    private fun readU32(raf: RandomAccessFile): Long {
+    private fun readU32(raf: RandomSource): Long {
       val buf = ByteArray(4)
       if (raf.read(buf) != 4) return -1
       return readU32(buf, 0)
@@ -277,14 +291,14 @@ internal class HevcProfileRewrite private constructor(
         (buf[offset + 3].toLong() and 0xFF)
     }
 
-    private fun readU64(raf: RandomAccessFile): Long {
+    private fun readU64(raf: RandomSource): Long {
       val high = readU32(raf)
       val low = readU32(raf)
       if (high < 0 || low < 0) return -1
       return (high shl 32) or low
     }
 
-    private fun readType(raf: RandomAccessFile): String? {
+    private fun readType(raf: RandomSource): String? {
       val buf = ByteArray(4)
       if (raf.read(buf) != 4) return null
       for (byte in buf) if (byte < 0x20 || byte > 0x7E) return null

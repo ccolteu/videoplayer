@@ -1,18 +1,24 @@
 package com.cc.videoplayer.playback
 
+import android.content.Context
 import java.io.File
-import java.io.RandomAccessFile
 
 internal object VideoDecoderChoice {
-  fun plan(path: String): DecoderPlan {
-    val stream = runCatching { describe(File(path)) }.getOrNull()
+  fun plan(context: Context, location: String): DecoderPlan {
+    val stream =
+      runCatching {
+        RandomSource.open(context, location).use { describe(it) }
+      }.getOrNull()
     return DecoderSelection.plan(stream, DeviceVideoDecoders.listed())
   }
 
   internal fun describe(file: File): VideoStream? {
     if (!file.isFile) return null
-    RandomAccessFile(file, "r").use { raf ->
-      if (raf.length() < 12) return null
+    return RandomSource.open(file).use { describe(it) }
+  }
+
+  private fun describe(raf: RandomSource): VideoStream? {
+    if (raf.length() < 12) return null
       val head = ByteArray(12)
       raf.readFully(head)
       val kind = head.copyOfRange(8, 12).decodeToString()
@@ -24,12 +30,11 @@ internal object VideoDecoderChoice {
         head[0] == 0x1A.toByte() && head[1] == 0x45.toByte() -> matroska(raf)
         else -> null
       }
-    }
   }
 
-  private fun aviVideo(raf: RandomAccessFile): String? = walkRiff(raf, 12, raf.length(), 0)
+  private fun aviVideo(raf: RandomSource): String? = walkRiff(raf, 12, raf.length(), 0)
 
-  private fun walkRiff(raf: RandomAccessFile, start: Long, end: Long, depth: Int): String? {
+  private fun walkRiff(raf: RandomSource, start: Long, end: Long, depth: Int): String? {
     if (depth > 8) return null
     var pos = start
     while (pos + 8 <= end) {
@@ -57,10 +62,10 @@ internal object VideoDecoderChoice {
     return null
   }
 
-  private fun mp4Video(raf: RandomAccessFile, end: Long): VideoStream? = walkMp4(raf, 0, end, null, 0)
+  private fun mp4Video(raf: RandomSource, end: Long): VideoStream? = walkMp4(raf, 0, end, null, 0)
 
   private fun walkMp4(
-    raf: RandomAccessFile,
+    raf: RandomSource,
     start: Long,
     end: Long,
     handler: String?,
@@ -105,7 +110,7 @@ internal object VideoDecoderChoice {
     return null
   }
 
-  private fun sampleEntry(raf: RandomAccessFile, payload: Long, end: Long): VideoStream? {
+  private fun sampleEntry(raf: RandomSource, payload: Long, end: Long): VideoStream? {
     if (end - payload < 16) return null
     raf.seek(payload + 4)
     val count = readU32Be(raf)
@@ -158,7 +163,7 @@ internal object VideoDecoderChoice {
     return null
   }
 
-  private fun matroska(raf: RandomAccessFile): VideoStream? {
+  private fun matroska(raf: RandomSource): VideoStream? {
     val window = minOf(raf.length(), 1024L * 1024).toInt()
     if (window < 16) return null
     val buf = ByteArray(window)
@@ -270,13 +275,13 @@ internal object VideoDecoderChoice {
     return -1
   }
 
-  private fun readFour(raf: RandomAccessFile): String? {
+  private fun readFour(raf: RandomSource): String? {
     val buf = ByteArray(4)
     if (raf.read(buf) != 4) return null
     return buf.decodeToString()
   }
 
-  private fun readU32Le(raf: RandomAccessFile): Long {
+  private fun readU32Le(raf: RandomSource): Long {
     val buf = ByteArray(4)
     if (raf.read(buf) != 4) return -1
     return (buf[0].toLong() and 0xFF) or
@@ -285,7 +290,7 @@ internal object VideoDecoderChoice {
       ((buf[3].toLong() and 0xFF) shl 24)
   }
 
-  private fun readU32Be(raf: RandomAccessFile): Long {
+  private fun readU32Be(raf: RandomSource): Long {
     val buf = ByteArray(4)
     if (raf.read(buf) != 4) return -1
     return readU32Be(buf, 0)
@@ -298,7 +303,7 @@ internal object VideoDecoderChoice {
       (buf[offset + 3].toLong() and 0xFF)
   }
 
-  private fun readU64Be(raf: RandomAccessFile): Long {
+  private fun readU64Be(raf: RandomSource): Long {
     val high = readU32Be(raf)
     val low = readU32Be(raf)
     if (high < 0 || low < 0) return -1

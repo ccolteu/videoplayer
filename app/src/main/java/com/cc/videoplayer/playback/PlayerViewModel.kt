@@ -14,6 +14,9 @@ import androidx.lifecycle.AndroidViewModel
 import com.cc.videoplayer.browse.formatSpeed
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import android.net.Uri
+import android.os.ParcelFileDescriptor
+import com.cc.videoplayer.browse.DocumentLibrary
 import java.io.File
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
@@ -70,6 +73,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   private var surfaceReady = false
   private var startPositionMs = 0L
   private var currentMedia: Media? = null
+  private var sourceDescriptor: ParcelFileDescriptor? = null
   private var profileRewrite: HevcProfileRewrite? = null
   private var restarting = false
   private var released = false
@@ -127,7 +131,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     openedPath = path
     lastPersistedMs = Long.MIN_VALUE
     pausedByFocus = false
-    playlist = FolderPlaylist.around(path)
+    playlist = FolderPlaylist.around(getApplication(), path)
     val resumeAt = PlaybackMemory.savedPosition(getApplication(), path)
     val keptSpeed = _state.value.speed
     val keptAspect = _state.value.aspect
@@ -156,12 +160,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
   fun playPrevious() {
     val previous = playlist.files.getOrNull(playlist.index - 1) ?: return
-    openFile(previous.absolutePath, previous.name)
+    openFile(previous.location, previous.name)
   }
 
   fun playNext() {
     val next = playlist.files.getOrNull(playlist.index + 1) ?: return
-    openFile(next.absolutePath, next.name)
+    openFile(next.location, next.name)
   }
 
   fun selectAudioTrack(id: Int) {
@@ -299,6 +303,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     mediaPlayer = null
     runCatching { currentMedia?.release() }
     currentMedia = null
+    runCatching { sourceDescriptor?.close() }
+    sourceDescriptor = null
     profileRewrite?.close()
     profileRewrite = null
     runCatching { libVlc?.release() }
@@ -317,33 +323,47 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     awaitingSurface = false
     val player = player()
     val vlc = libVlc ?: return
-    val plan = VideoDecoderChoice.plan(path)
+    val plan = VideoDecoderChoice.plan(getApplication(), path)
     val rewrite = if (plan.rewriteHevcMain10) HevcProfileRewrite.open(getApplication(), path) else null
     val hardware = plan.useMediaCodec && (!plan.rewriteHevcMain10 || rewrite != null)
+    val content = Uri.parse(path).scheme == "content"
+    val descriptor =
+      if (rewrite == null && content) {
+        getApplication<Application>().contentResolver.openFileDescriptor(Uri.parse(path), "r")
+      } else {
+        null
+      }
     val media =
       try {
-        if (rewrite != null) Media(vlc, rewrite.fileDescriptor) else Media(vlc, path)
+        when {
+          rewrite != null -> Media(vlc, rewrite.fileDescriptor)
+          descriptor != null -> Media(vlc, descriptor.fileDescriptor)
+          else -> Media(vlc, path)
+        }
       } catch (error: Throwable) {
         rewrite?.close()
+        runCatching { descriptor?.close() }
         throw error
       }
     // `none` would also reject AAC, because MediaCodec audio is off by default.
     media.addOption(if (hardware) ":codec=mediacodec_ndk,mediacodec,all" else ":codec=avcodec,all")
     media.addOption(":file-caching=1500")
     if (positionMs > 0) media.addOption(":start-time=${positionMs / 1000.0}")
-    for (subtitle in subtitleFiles(File(path))) {
-      val uri = android.net.Uri.fromFile(subtitle).toString()
-      media.addSlave(IMedia.Slave(IMedia.Slave.Type.Subtitle, 1, uri))
+    for (subtitle in subtitlesFor(path)) {
+      media.addSlave(IMedia.Slave(IMedia.Slave.Type.Subtitle, 1, Uri.fromFile(subtitle).toString()))
     }
     val previous = currentMedia
     val previousRewrite = profileRewrite
+    val previousDescriptor = sourceDescriptor
     currentMedia = media
     profileRewrite = rewrite
+    sourceDescriptor = descriptor
     restarting = true
     if (player.media != null) runCatching { player.stop() }
     player.media = media
     runCatching { previous?.release() }
     if (previousRewrite !== rewrite) previousRewrite?.close()
+    if (previousDescriptor !== descriptor) runCatching { previousDescriptor?.close() }
     player.setVideoTrackEnabled(true)
     player.rate = _state.value.speed
     player.videoScale = _state.value.aspect
@@ -439,11 +459,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     if (next != null) {
       mainHandler.postDelayed({
         if (released || openedPath != finished) return@postDelayed
-        openFile(next.absolutePath, next.name)
+        openFile(next.location, next.name)
       }, 50)
     } else {
       _state.update { it.copy(playing = false, ended = true, buffering = false) }
     }
+  }
+
+  private fun subtitlesFor(location: String): List<File> {
+    val uri = Uri.parse(location)
+    if (uri.scheme != "content") return subtitleFiles(File(location))
+    return DocumentLibrary.subtitleUris(getApplication(), location).mapNotNull { cachedSubtitle(getApplication(), it) }
   }
 
   private fun publishTracks() {
