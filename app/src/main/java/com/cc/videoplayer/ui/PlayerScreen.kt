@@ -79,9 +79,9 @@ import com.cc.videoplayer.browse.formatDuration
 import com.cc.videoplayer.playback.MediaTrack
 import com.cc.videoplayer.playback.PlaybackState
 import com.cc.videoplayer.playback.PlayerViewModel
+import com.cc.videoplayer.theme.Amber
 import com.cc.videoplayer.theme.Cream
 import com.cc.videoplayer.theme.Panel
-import com.cc.videoplayer.theme.Signal
 import kotlinx.coroutines.delay
 
 @Composable
@@ -201,15 +201,15 @@ fun PlayerScreen(
         flashText,
         modifier = Modifier.align(Alignment.Center),
         style = MaterialTheme.typography.titleLarge,
-        color = Color.White,
+        color = Cream,
       )
     }
 
     if (state.buffering && state.error == null && !inPip) {
       if (state.positionMs <= 0L) {
-        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Signal)
+        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = Amber)
       } else {
-        LinearProgressIndicator(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(), color = Signal)
+        LinearProgressIndicator(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(), color = Amber)
       }
     }
 
@@ -218,7 +218,7 @@ fun PlayerScreen(
         modifier = Modifier.align(Alignment.Center).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
       ) {
-        Text(state.error.orEmpty(), color = Color.White, style = MaterialTheme.typography.bodyLarge)
+        Text(state.error.orEmpty(), color = Cream, style = MaterialTheme.typography.bodyLarge)
         TextButton(onClick = onBack) { Text("Back") }
       }
     }
@@ -319,12 +319,12 @@ private fun PlayerChrome(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       IconButton(onClick = onBack) {
-        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Cream)
       }
       Text(
         state.title,
         modifier = Modifier.weight(1f),
-        color = Color.White,
+        color = Cream,
         style = MaterialTheme.typography.titleMedium,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -333,7 +333,7 @@ private fun PlayerChrome(
 
     if (!state.playing) {
       IconButton(onClick = onPlayPause, modifier = Modifier.align(Alignment.Center).size(72.dp)) {
-        Icon(playIcon, contentDescription = playLabel, tint = Color.White, modifier = Modifier.size(48.dp))
+        Icon(playIcon, contentDescription = playLabel, tint = Cream, modifier = Modifier.size(48.dp))
       }
     }
 
@@ -366,23 +366,23 @@ private fun PlayerChrome(
           Icon(
             Icons.Filled.SkipPrevious,
             contentDescription = "Previous",
-            tint = if (state.hasPrevious) Color.White else Color.White.copy(alpha = 0.35f),
+            tint = if (state.hasPrevious) Cream else Cream.copy(alpha = 0.35f),
           )
         }
         IconButton(onClick = onSkipBack) {
-          Icon(Icons.Filled.Replay10, contentDescription = "Back 10 seconds", tint = Color.White)
+          Icon(Icons.Filled.Replay10, contentDescription = "Back 10 seconds", tint = Cream)
         }
         IconButton(onClick = onPlayPause) {
-          Icon(playIcon, contentDescription = playLabel, tint = Color.White)
+          Icon(playIcon, contentDescription = playLabel, tint = Cream)
         }
         IconButton(onClick = onSkipForward) {
-          Icon(Icons.Filled.Forward10, contentDescription = "Forward 10 seconds", tint = Color.White)
+          Icon(Icons.Filled.Forward10, contentDescription = "Forward 10 seconds", tint = Cream)
         }
         IconButton(onClick = onNext, enabled = state.hasNext) {
           Icon(
             Icons.Filled.SkipNext,
             contentDescription = "Next",
-            tint = if (state.hasNext) Color.White else Color.White.copy(alpha = 0.35f),
+            tint = if (state.hasNext) Cream else Cream.copy(alpha = 0.35f),
           )
         }
       }
@@ -398,12 +398,12 @@ private fun PlayerChrome(
         }
         if (state.subtitleTracks.isNotEmpty()) {
           IconButton(onClick = onSubtitles) {
-            Icon(Icons.Filled.ClosedCaption, contentDescription = "Subtitles", tint = Color.White)
+            Icon(Icons.Filled.ClosedCaption, contentDescription = "Subtitles", tint = Cream)
           }
         }
         if (pipAvailable) {
           IconButton(onClick = onPip) {
-            Icon(Icons.Filled.PictureInPicture, contentDescription = "Picture in picture", tint = Color.White)
+            Icon(Icons.Filled.PictureInPicture, contentDescription = "Picture in picture", tint = Cream)
           }
         }
       }
@@ -454,7 +454,7 @@ private fun TrackList(
           Text(
             track.name.ifBlank { "Track" },
             modifier = Modifier.fillMaxWidth(),
-            color = if (selected) Signal else Cream,
+            color = if (selected) Amber else Cream,
           )
         }
       }
@@ -465,5 +465,5 @@ private fun TrackList(
 
 @Composable
 private fun TimeText(value: String) {
-  Text(value, color = Color.White, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
+  Text(value, color = Cream, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
 }

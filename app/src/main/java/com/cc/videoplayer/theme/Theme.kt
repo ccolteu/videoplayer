@@ -6,9 +6,9 @@ import androidx.compose.runtime.Composable
 
 private val Scheme =
   darkColorScheme(
-    primary = Signal,
+    primary = Amber,
     onPrimary = Ink,
-    secondary = SignalDark,
+    secondary = AmberDark,
     onSecondary = Cream,
     background = Ink,
     onBackground = Cream,
@@ -16,7 +16,7 @@ private val Scheme =
     onSurface = Cream,
     surfaceVariant = PanelRaised,
     onSurfaceVariant = Muted,
-    outline = SignalDark,
+    outline = AmberDark,
   )
 
 @Composable

@@ -1,0 +1,1 @@
+First Play Store release. Choose a video folder, browse it in the app, and play the file when you tap it. Resume, subtitles, and the next episode stay in this player.

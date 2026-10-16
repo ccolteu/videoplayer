@@ -2,10 +2,10 @@ package com.cc.videoplayer.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Ink = Color(0xFF0C1014)
-val Panel = Color(0xFF161C22)
-val PanelRaised = Color(0xFF222A32)
-val Cream = Color(0xFFE7EEF4)
-val Muted = Color(0xFF9AABBA)
-val Signal = Color(0xFF7EB6FF)
-val SignalDark = Color(0xFF3D6EA8)
+val Ink = Color(0xFF0E0C12)
+val Panel = Color(0xFF1A1622)
+val PanelRaised = Color(0xFF241E2E)
+val Cream = Color(0xFFF4E8D4)
+val Muted = Color(0xFFB8A994)
+val Amber = Color(0xFFE8B86D)
+val AmberDark = Color(0xFF8A6A32)

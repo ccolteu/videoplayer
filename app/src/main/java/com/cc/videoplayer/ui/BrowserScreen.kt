@@ -107,7 +107,6 @@ fun BrowserScreen(vm: BrowserViewModel = viewModel()) {
   ) {
     BrowserTopBar(
       title = folderTitle,
-      subtitle = if (insideFolder) null else "Tap a video to play it here",
       canGoUp = insideFolder,
       onBack = vm::up,
       onAbout = { showAbout = true },
@@ -172,7 +171,6 @@ private fun AccessPrompt(onChoose: () -> Unit) {
 @Composable
 private fun BrowserTopBar(
   title: String,
-  subtitle: String?,
   canGoUp: Boolean,
   onBack: () -> Unit,
   onAbout: () -> Unit,
@@ -189,18 +187,13 @@ private fun BrowserTopBar(
     } else {
       Spacer(modifier = Modifier.width(12.dp))
     }
-    Column(modifier = Modifier.weight(1f)) {
-      Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      if (subtitle != null) {
-        Text(
-          subtitle,
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-    }
+    Text(
+      title,
+      modifier = Modifier.weight(1f),
+      style = MaterialTheme.typography.titleLarge,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
     IconButton(onClick = onAbout) {
       Icon(Icons.Filled.Info, contentDescription = "About")
     }

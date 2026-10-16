@@ -1,0 +1,24 @@
+Your files. Your folder. Your player.
+
+Video Player is a local library app. There is no catalog, no account, and no stream. You point it at a folder on the device or an SD card and play what is already there.
+
+PICK A FOLDER
+Open the folder that holds your videos and tap Use this folder. Android keeps that grant, and you can add another folder later. The card itself cannot be granted, so choose the folder, such as TV, rather than the root of the card.
+
+BROWSE
+The in-app list is the folder you granted. Open a folder, tap a video, and it plays here. There is no chooser and no handoff to another app.
+
+PLAYBACK
+Play and pause, seek, skip 10 seconds, change speed and aspect ratio, and enter picture-in-picture. The next and previous videos in the folder are one tap away, and a finished file advances to the next one. Leaving a video and coming back resumes where you stopped, except the first few seconds and the last few seconds.
+
+Subtitles can be embedded or sitting beside the file (SRT, ASS, SSA, SUB, VTT), including a Subs folder named for the episode. When a file has more than one audio track, you can pick it. Playback pauses when another app takes the audio, and a brief interruption resumes when the audio comes back.
+
+FORMATS
+MP4, MKV, AVI, MOV, WebM, MPEG, TS, and other common video files. The player uses a hardware decoder when the device can draw that file, and FFmpeg when it cannot, so a software decoder is not left to draw a bad picture.
+
+WHAT THIS APP IS NOT
+Not a store. Not a locker. Not a recommendation engine. No ads, no in-app purchases, no sign-in. Streaming and cloud libraries are someone else's product.
+
+Portrait or landscape. Offline. Your disk.
+
+Video Player. Set the folder. Press play.
